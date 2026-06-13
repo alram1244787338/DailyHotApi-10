@@ -32,7 +32,10 @@
     "dev": "cross-env NODE_ENV=development tsx watch --no-cache src/index.ts",
     "dev:cache": "cross-env NODE_ENV=development tsx watch src/index.ts",
     "build": "tsc --project tsconfig.json",
-    "start": "cross-env NODE_ENV=development node dist/index.js"
+    "start": "cross-env NODE_ENV=development node dist/index.js",
+    "test": "tsx --test src/utils/__tests__/cacheKey.test.ts src/utils/__tests__/getData.test.ts",
+    "test:key": "tsx --test src/utils/__tests__/cacheKey.test.ts",
+    "test:data": "tsx --test src/utils/__tests__/getData.test.ts"
   },
   "type": "module",
   "dependencies": {

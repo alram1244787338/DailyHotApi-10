@@ -18,7 +18,7 @@ const cache = new NodeCache({
   // 克隆变量
   useClones: false,
   // 最大键值对
-  maxKeys: 100,
+  maxKeys: 1000,
 });
 
 // init Redis client
@@ -76,8 +76,9 @@ cache.on("del", (key) => {
 });
 
 /**
- * 从缓存中获取数据
- * @param key 缓存键
+ * 从缓存中获取数据（Redis 优先，NodeCache 兜底）
+ * 两层使用完全相同的 key（由调用方通过 cacheKey 工具构建）
+ * @param key 缓存键（已包含请求参数的复合键）
  * @returns 缓存数据
  */
 export const getCache = async (key: string): Promise<CacheData | undefined> => {
@@ -85,19 +86,27 @@ export const getCache = async (key: string): Promise<CacheData | undefined> => {
   if (isRedisAvailable) {
     try {
       const redisResult = await redis.get(key);
-      if (redisResult) return parse(redisResult);
+      if (redisResult) {
+        logger.debug?.(`💾 [Redis] HIT key: ${key}`);
+        return parse(redisResult);
+      }
     } catch (error) {
       logger.error(
         `📦 [Redis] get error: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
     }
   }
-  return cache.get(key);
+  // NodeCache 兜底（与 Redis 使用同一 key）
+  const nodeResult = cache.get(key) as CacheData | undefined;
+  if (nodeResult) {
+    logger.debug?.(`💾 [NodeCache] HIT key: ${key}`);
+  }
+  return nodeResult;
 };
 
 /**
- * 将数据写入缓存
- * @param key 缓存键
+ * 将数据写入缓存（Redis + NodeCache 双写，使用同一 key）
+ * @param key 缓存键（已包含请求参数的复合键）
  * @param value 缓存值
  * @param ttl 缓存过期时间（ 秒 ）
  * @returns 是否写入成功
@@ -107,32 +116,35 @@ export const setCache = async (
   value: CacheData,
   ttl: number = config.CACHE_TTL,
 ): Promise<boolean> => {
-  // 尝试写入 Redis
+  // 尝试写入 Redis（跳过 Buffer 类型，Redis 序列化不支持）
   if (isRedisAvailable && !Buffer.isBuffer(value?.data)) {
     try {
       await redis.set(key, stringify(value), "EX", ttl);
-      if (logger) logger.info(`💾 [REDIS] ${key} has been cached`);
+      logger.info(`💾 [Redis] SET key: ${key} (ttl=${ttl}s)`);
     } catch (error) {
       logger.error(
         `📦 [Redis] set error: ${error instanceof Error ? error.message : "Unknown error"}`,
       );
     }
   }
+  // NodeCache 始终写入（保持两层一致）
   const success = cache.set(key, value, ttl);
-  if (logger) logger.info(`💾 [NodeCache] ${key} has been cached`);
+  logger.info(`💾 [NodeCache] SET key: ${key} (ttl=${ttl}s)`);
   return success;
 };
 
 /**
- * 从缓存中删除数据
- * @param key 缓存键
+ * 从缓存中删除数据（Redis + NodeCache 双删，使用同一 key）
+ * @param key 缓存键（已包含请求参数的复合键）
  * @returns 是否删除成功
  */
 export const delCache = async (key: string): Promise<boolean> => {
   let redisSuccess = true;
   try {
-    await redis.del(key);
-    logger.info(`🗑️ [REDIS] ${key} has been deleted from Redis`);
+    const deleted = await redis.del(key);
+    if (deleted > 0) {
+      logger.info(`🗑️ [Redis] DEL key: ${key}`);
+    }
   } catch (error) {
     redisSuccess = false;
     logger.error(
@@ -141,6 +153,19 @@ export const delCache = async (key: string): Promise<boolean> => {
   }
   // 尝试删除 NodeCache
   const nodeCacheSuccess = cache.del(key) > 0;
-  if (logger) logger.info(`🗑️ [CACHE] ${key} has been deleted from NodeCache`);
+  if (nodeCacheSuccess) {
+    logger.info(`🗑️ [NodeCache] DEL key: ${key}`);
+  }
   return redisSuccess && nodeCacheSuccess;
+};
+
+/**
+ * 断开 Redis 连接（仅供测试清理使用）
+ */
+export const disconnectRedis = async (): Promise<void> => {
+  try {
+    redis.disconnect();
+  } catch {
+    // 忽略断开连接时的错误
+  }
 };
