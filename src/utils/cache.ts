@@ -125,22 +125,48 @@ export const setCache = async (
 
 /**
  * 从缓存中删除数据
+ *
+ * Redis 与 NodeCache 使用同一个 key 删除，保证两层行为一致。
+ * 注意：“键本来就不存在”属于正常情况（例如强制刷新一个还没缓存过的请求），
+ * 不应被当作删除失败，因此返回值只反映“删除过程是否出错”，而不是“是否真的删到了东西”。
+ *
  * @param key 缓存键
- * @returns 是否删除成功
+ * @returns 删除过程是否未出错
  */
 export const delCache = async (key: string): Promise<boolean> => {
   let redisSuccess = true;
-  try {
-    await redis.del(key);
-    logger.info(`🗑️ [REDIS] ${key} has been deleted from Redis`);
-  } catch (error) {
-    redisSuccess = false;
-    logger.error(
-      `📦 [Redis] del error: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
+  // 与 get/set 保持一致：先确保 Redis 连接状态已确定
+  await ensureRedisConnection();
+  if (isRedisAvailable) {
+    try {
+      const redisRemoved = await redis.del(key);
+      logger.info(`🗑️ [REDIS] deleted key: ${key} (removed ${redisRemoved})`);
+    } catch (error) {
+      redisSuccess = false;
+      logger.error(
+        `📦 [Redis] del error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    }
   }
-  // 尝试删除 NodeCache
-  const nodeCacheSuccess = cache.del(key) > 0;
-  if (logger) logger.info(`🗑️ [CACHE] ${key} has been deleted from NodeCache`);
-  return redisSuccess && nodeCacheSuccess;
+  // 删除 NodeCache（同一个 key）
+  const nodeCacheRemoved = cache.del(key);
+  logger.info(`🗑️ [NodeCache] deleted key: ${key} (removed ${nodeCacheRemoved})`);
+  return redisSuccess;
+};
+
+/**
+ * 关闭缓存连接并释放资源。
+ *
+ * NodeCache 的过期检查定时器与 Redis 的后台重连定时器都会一直占用事件循环，
+ * 进程（或测试）若想正常退出需要主动关闭。主要用于进程优雅退出与测试收尾。
+ */
+export const disconnectCache = (): void => {
+  try {
+    // 立即断开并停止重连
+    redis.disconnect();
+  } catch {
+    // 关闭异常无需处理
+  }
+  // 停止 NodeCache 的定时检查并清空
+  cache.close();
 };

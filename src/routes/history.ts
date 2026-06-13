@@ -46,6 +46,9 @@ const getList = async (options: Options, noCache: boolean) => {
   const result = await get<HistoryResponse>({
     url,
     noCache,
+    // 接口数据按“月”聚合（日期是在拿到整月数据后再筛选），且 params 里的 _ 只是给上游 CDN 的
+    // 防缓存时间戳、并不影响返回内容。因此用按月的稳定逻辑键，避免每次时间戳不同导致本地缓存永不命中。
+    cacheKey: `history:${monthStr}`,
     params: {
       _: new Date().getTime(),
     },

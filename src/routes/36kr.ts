@@ -59,6 +59,9 @@ const getList = async (options: Options, noCache: boolean): Promise<RouterResTyp
   const result = await post<KrResponse>({
     url,
     noCache,
+    // 请求体里的 timestamp 每次都不同但不影响返回内容，响应只由榜单分类(type)决定（已体现在 url 上），
+    // 故用按分类的稳定逻辑键，避免 timestamp 把缓存键打散导致永不命中。
+    cacheKey: `36kr:${type}`,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
     },

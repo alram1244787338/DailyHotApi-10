@@ -45,6 +45,9 @@ const getList = async (noCache: boolean): Promise<RouterResType> => {
   const token = (await getToken()) as string;
   const result = await get<CtoResponse>({
     url,
+    // timestamp / token / sign 每次请求都不同（且 sign 由 timestamp 派生），但不影响返回内容，
+    // 响应只由分页等业务参数决定，故用业务参数构成的稳定逻辑键，避免缓存永不命中。
+    cacheKey: `51cto:recommend:p${params.page}:s${params.page_size}`,
     params: {
       ...params,
       timestamp,

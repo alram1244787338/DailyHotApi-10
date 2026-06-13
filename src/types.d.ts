@@ -46,6 +46,13 @@ export interface Get {
   ttl?: number;
   originaInfo?: boolean;
   responseType?: ResponseType;
+  /**
+   * 自定义缓存键（逻辑键）。
+   * 当请求中包含时间戳、签名等“每次都不同但并不影响响应内容”的参数时，
+   * 默认会把这些参数也算进缓存键，导致缓存永远命中不了。
+   * 这种情况下可由调用方显式指定一个稳定的逻辑键（需保证它能区分所有会影响响应的变量）。
+   */
+  cacheKey?: string;
 }
 
 export interface Post {
@@ -56,6 +63,11 @@ export interface Post {
   noCache?: boolean;
   ttl?: number;
   originaInfo?: boolean;
+  /**
+   * 自定义缓存键（逻辑键），含义同 {@link Get.cacheKey}。
+   * 适用于请求体里带时间戳/签名等易变字段的接口。
+   */
+  cacheKey?: string;
 }
 
 // 参数类型
