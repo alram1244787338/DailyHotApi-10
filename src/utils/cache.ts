@@ -20,6 +20,10 @@ export interface CacheData {
  * - 关键一致性规则：当 Redis 可用且未命中（MISS）时，直接视为「无缓存」，
  *   不再回退去读可能过期的 NodeCache，避免出现「A 接口读到旧的本地缓存、
  *   B 接口读到新的 Redis 数据」这种排查地狱。
+ * - 唯一例外是 Buffer 数据：它无法安全序列化进 Redis，因此始终只存在于
+ *   NodeCache（本地权威）。getCache 在 Redis 未命中时，会对「本地存的是
+ *   Buffer」这一类键回退读取本地副本，保证 setCache 与 getCache 行为一致。
+ *   这类值天然是「单实例本地」的，不参与多实例共享。
  *
  * Redis 可用性完全由 ioredis 的事件驱动（ready/error/close），并依赖
  * retryStrategy 在后台持续重连，因此：首次连不上不会永久卡死，运行中断线
@@ -145,7 +149,14 @@ export const createCacheStore = ({
           return parse(redisResult) as CacheData;
         }
         // Redis 可用但未命中：以 Redis 为权威，视为无缓存。
-        // 不回退读取可能过期的 NodeCache，保证多实例 / 双层数据一致。
+        // 例外：Buffer 数据无法安全写入 Redis，只存在于本地 NodeCache，
+        // 属于「本地权威」的值——对这类键回退读取本地副本，否则会出现
+        // 「setCache 报成功、getCache 永远读不到」的自相矛盾。
+        // 非 Buffer 的普通值仍严格视为无缓存，绝不回退读可能过期的本地数据。
+        const localOnMiss = cache.get<CacheData>(key);
+        if (localOnMiss !== undefined && Buffer.isBuffer(localOnMiss.data)) {
+          return localOnMiss;
+        }
         return undefined;
       } catch (error) {
         // 单次读失败 → 降级读取本地 NodeCache（兜底）
@@ -177,8 +188,12 @@ export const createCacheStore = ({
     }
 
     if (isBuffer) {
-      // Buffer 无法安全序列化进 Redis，只能保留在 NodeCache
-      logger.warn(`💾 [Cache] "${key}" is Buffer data, kept in NodeCache only (skipped Redis).`);
+      // Buffer 无法安全序列化进 Redis，只能保留在 NodeCache（本地权威）。
+      // getCache 在 Redis 未命中时会对 Buffer 键回退读本地，因此这里的成功是
+      // 真实可读的成功，不是假象；代价是该值仅在本实例可见、不跨实例共享。
+      logger.warn(
+        `💾 [Cache] "${key}" is Buffer data, kept in NodeCache only (local-only, not shared via Redis).`,
+      );
       return nodeOk;
     }
 

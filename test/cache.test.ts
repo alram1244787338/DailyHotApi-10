@@ -12,6 +12,7 @@
  *   2b. 双层一致性          → Redis 可用时以 Redis 为权威，MISS 不读过期 NodeCache
  *   3. Redis 正常时删除缓存  → Redis 与 NodeCache 同时清除
  *   4. 写 Redis 失败回退     → 本地仍有数据，单次读异常时降级读 NodeCache
+ *   4b. Buffer 本地权威      → Redis 可用且 MISS 时仍能从 NodeCache 读回
  */
 
 // 必须在导入缓存模块之前固定环境，避免默认实例去连真实 Redis / 写日志文件
@@ -208,6 +209,27 @@ test("write failure: reports false but keeps NodeCache copy for degraded reads",
   redis.failGet = true;
   assert.deepEqual(await store.getCache("kw"), data("w"), "单次读异常应降级读 NodeCache");
   assert.ok(has(lines.error, /GET "kw" failed/i), "应记录单次读失败");
+});
+
+// ── 场景 4b：Buffer 为本地权威 —— Redis 可用且未命中时仍能从 NodeCache 读回 ──
+test("buffer values are local-authoritative: cached and read back even when Redis is up", async () => {
+  const { redis, store, lines } = build();
+  redis.goReady();
+
+  const setBefore = redis.setCalls;
+  const buf: CacheData = { updateTime: "t-buf", data: Buffer.from("raw-bytes") };
+  const okSet = await store.setCache("kbuf", buf);
+  assert.equal(okSet, true, "Buffer 写入（本地权威）应返回成功");
+  assert.equal(redis.setCalls, setBefore, "Buffer 绝不能写入 Redis（无法安全序列化）");
+  assert.ok(has(lines.warn, /Buffer data, kept in NodeCache only/i), "应提示 Buffer 仅存本地");
+
+  // Redis 可用且必然 MISS（从未写入 Redis），但 Buffer 属本地权威 → 必须读回
+  const getBefore = redis.getCalls;
+  const got = await store.getCache("kbuf");
+  assert.ok(got !== undefined, "Redis 未命中时 Buffer 值仍应从 NodeCache 读回");
+  assert.ok(Buffer.isBuffer(got?.data), "读回的应仍是 Buffer");
+  assert.equal((got?.data as Buffer).toString(), "raw-bytes");
+  assert.ok(redis.getCalls > getBefore, "getCache 仍应先查询 Redis 以确认 MISS（不是直接跳过）");
 });
 
 // ── 运行 ─────────────────────────────────────────────────────────────────
